@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+/* eslint-disable no-loop-func */
+import { useEffect, useState,useRef } from "react";
 import Chat, {
   Bubble,
   useMessages,
@@ -10,8 +11,6 @@ import Chat, {
 } from "@chatui/core";
 import { io } from "socket.io-client";
 import { v4 as uuid } from 'uuid'
-import axios from 'axios'
-
 const converter = new showdown.Converter(); // eslint-disable-line no-undef
 
 let userUUID = localStorage.getItem("userUUID");
@@ -43,10 +42,10 @@ const initialMessages = [
   {
     type: "noticeWithURL",
     content: {
-      text: "gitHub：https://github.com/finn/chatgpt-web",
-      url: 'https://github.com/yi-ge/chatgpt-web'
+      text: "开源地址gitHub：https://github.com/finnfly/finn-web-chat",
+      url: 'https://github.com/finnfly/finn-web-chat'
     },
-  },
+  }
 ];
 
 const defaultQuickReplies = [
@@ -61,8 +60,9 @@ const defaultQuickReplies = [
 let isExecuted = false;
 
 function App () {
-  const { messages, appendMsg, setTyping, deleteMsg } =
+  const { messages, appendMsg, setTyping, deleteMsg, updateMsg } =
   useMessages(initialMessages);
+  const messagesRef = useRef([]);
   const [onlineUserNum, setOnlineUserNum] = useState(null);
   const [waitingUserNum, setWaitingUserNum] = useState(null);
   const [accountCount, setAccountCount] = useState(null);
@@ -124,50 +124,124 @@ function App () {
   }
 
   useEffect(() => {
-    console.log('更新')
+    messagesRef.current = messages;
     // if (!isExecuted) socketHandler();
     document.querySelectorAll('pre code').forEach((el) => hljs.highlightElement(el)) // eslint-disable-line no-undef
-  });
+  },[messages]);
 
-  async function chatWithKimi (messageValue) {
-    try {
-      //请求接口这块儿我使用的是axios，你也可以用fetch。
-      const response = await axios.post(
-        `https://api.moonshot.cn/v1/chat/completions`,
-        {
+  async function fetachTest (messageValue) {
+    try{
+      const response = await fetch('https://api.moonshot.cn/v1/chat/completions',{
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'sk-R7lyqaVSoLAvVVAaYshGqLkqB0b1QEf5sHGAcRZxReEvTxVa'
+        },
+        body: JSON.stringify({
           model: 'moonshot-v1-8k',
-          // inputValue为用户输入信息
+          stream: true,
           messages: [
             { role: 'user', content: messageValue },
           ],
-          // 使用什么采样温度，值越高随机度越高，官方建议使用0.3.详细看官方文档
           temperature: 0.3,
-        },
-        {
-          headers: {
-            Authorization: `sk-R7lyqaVSoLAvVVAaYshGqLkqB0b1QEf5sHGAcRZxReEvTxVa`,
-          },
-        }
-      )
-      console.log(
-        '仅此而已啦',
-        response.data
-      )
-      const AIchatContent = response.data.choices[0]?.message?.content
+        }),
+      }) // 发起请求
+      console.log(response)
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+      const reader = response.body.getReader(); // 获取响应数据的 reader
+      let messagedata = '';
+      let newMessageArr = []
       appendMsg({
         type: "html",
-        content: { text: converter.makeHtml(AIchatContent) },
+        content: { text: "" },
         user: { avatar: "/ai.png" },
       });
-      console.log(
-        'response.data.choices[0].message',
-        response.data.choices[0]?.message?.content
-      )
-
-    } catch (error) {
-      console.error('Error:', error)
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          console.log('结束了亲')
+          break;
+        }
+        newMessageArr = [...newMessageArr].concat(new TextDecoder().decode(value).split('\n').filter(line => line.trim() !== ''))
+        console.log(newMessageArr)
+        newMessageArr.some(item =>{
+         const choices = JSON.parse(item.replace('data:','')).choices[0]
+         const content = choices.delta.content
+         const finishReason = choices.finish_reason
+         const updateId = messagesRef.current[messagesRef.current.length-1]._id
+         if(finishReason ==='stop'){
+          return true;
+         }
+         messagedata += content;
+         const messageParams={
+            type: "html",
+            content: { text: converter.makeHtml(messagedata) },
+            user: { avatar: "/ai.png" },
+          }
+         updateMsg(updateId,messageParams)
+        })
+        // 将每个读取到的数据块转换为字符串并拼接到data中
+      }
     }
+    catch(error) {
+      appendMsg({
+        type: "html",
+        content: { text: "你这家伙操作太快了，等会儿再试试~" },
+        user: { avatar: "/ai.png" },
+      });
+      console.error('Fetch error:', error);
+    };
   }
+
+  async function chatWithKimi(messageValue) {
+    try {
+      const response = await fetch('https://api.moonshot.cn/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'sk-R7lyqaVSoLAvVVAaYshGqLkqB0b1QEf5sHGAcRZxReEvTxVa'
+        },
+        body: JSON.stringify({
+          model: 'moonshot-v1-8k',
+          stream: true,
+          messages: [
+            { role: 'user', content: messageValue },
+          ],
+          temperature: 0.3,
+        }),
+      });
+  
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+  
+      // 获取响应的读取器
+      const reader = response.body.getReader();
+      console.log(response)
+      // 循环读取数据流
+      while (true) {
+        const { done, value } = await reader.read();
+  
+        if (done) {
+          console.log('Stream finished');
+          break;
+        }
+  
+        // 处理读取到的数据
+        console.log('Received data:', value);
+      }
+  
+      // 如果您需要处理完整的响应数据，您可以使用以下代码
+      // const responseData = await response.json();
+      // console.log('Response data:', responseData);
+  
+    } catch (error) {
+      console.error('Error:', error);
+    }
+  }  
+  
 
   async function handleSend (type, val) {
     console.log('输入了什么啊',val.trim())
@@ -181,8 +255,8 @@ function App () {
 
       setTyping(true);
 
-      chatWithKimi(val.trim())
-
+      // chatWithKimi(val.trim())
+      fetachTest(val.trim())
       // socket.emit('chatgpt', {
       //   token: sessionStorage.getItem("token"),
       //   userUUID,
@@ -234,7 +308,7 @@ function App () {
         );
       case "noticeWithURL":
         return (
-          <a href="https://github.com/yi-ge/chatgpt-web" target="_blank" rel="noreferrer">
+          <a href="https://github.com/finnfly/finn-web-chat" target="_blank" rel="noreferrer">
             <Notice
               content={content.text}
               url={content.url}
